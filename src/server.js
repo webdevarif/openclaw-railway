@@ -19,6 +19,12 @@ const WORKSPACE_DIR =
 
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 
+const CONTROL_UI_ALLOWED_ORIGINS = process.env.CONTROL_UI_ALLOWED_ORIGINS?.trim()
+  ? process.env.CONTROL_UI_ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
+  : [];
+
+const FORCE_WS_ORIGIN = process.env.FORCE_WS_ORIGIN?.toLowerCase() === "true";
+
 function resolveGatewayToken() {
   const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   if (envTok) return envTok;
@@ -109,6 +115,53 @@ let shuttingDown = false;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function patchAllowedOrigins() {
+  if (CONTROL_UI_ALLOWED_ORIGINS.length === 0) {
+    console.log("[config] CONTROL_UI_ALLOWED_ORIGINS not set, skipping patch");
+    return;
+  }
+
+  try {
+    // Get current allowed origins
+    const currentResult = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "get", "gateway.controlUi.allowedOrigins"]),
+    );
+    
+    let currentOrigins = [];
+    if (currentResult.code === 0 && currentResult.output.trim()) {
+      try {
+        currentOrigins = JSON.parse(currentResult.output.trim());
+      } catch (e) {
+        console.warn(`[config] Failed to parse current allowedOrigins: ${e.message}`);
+      }
+    }
+
+    // Merge with new origins
+    const mergedOrigins = [...new Set([...currentOrigins, ...CONTROL_UI_ALLOWED_ORIGINS])];
+    
+    // Set the merged origins
+    const setResult = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "gateway.controlUi.allowedOrigins",
+        JSON.stringify(mergedOrigins),
+      ]),
+    );
+
+    if (setResult.code === 0) {
+      console.log(`[config] Set gateway.controlUi.allowedOrigins to: ${JSON.stringify(mergedOrigins)}`);
+    } else {
+      console.error(`[config] Failed to set allowedOrigins: ${setResult.output}`);
+    }
+  } catch (err) {
+    console.error(`[config] Error patching allowedOrigins: ${err.message}`);
+  }
 }
 
 async function waitForGatewayReady(opts = {}) {
@@ -656,6 +709,13 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       );
       extra += `[config] gateway.trustedProxies exit=${proxiesResult.code}\n`;
 
+      // Patch allowed origins if configured
+      if (CONTROL_UI_ALLOWED_ORIGINS.length > 0) {
+        extra += "[setup] Configuring allowed origins...\n";
+        await patchAllowedOrigins();
+        extra += "[config] gateway.controlUi.allowedOrigins patched\n";
+      }
+
       if (payload.model?.trim()) {
         extra += `[setup] Setting model to ${payload.model.trim()}...\n`;
         const modelResult = await runCmd(
@@ -1054,6 +1114,16 @@ proxy.on("proxyReq", (proxyReq, req, res) => {
 
 proxy.on("proxyReqWs", (proxyReq, req, socket, options, head) => {
   proxyReq.setHeader("Authorization", `Bearer ${OPENCLAW_GATEWAY_TOKEN}`);
+  
+  // Fallback: Force origin if enabled (for external dashboard connections)
+  if (FORCE_WS_ORIGIN && req.headers.origin) {
+    const host = req.headers.host || 'localhost';
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    const forcedOrigin = `${protocol}://${host}`;
+    
+    console.log(`[proxy] Forcing WebSocket Origin from ${req.headers.origin} to ${forcedOrigin}`);
+    proxyReq.setHeader("Origin", forcedOrigin);
+  }
 });
 
 app.use(async (req, res) => {

@@ -48,6 +48,46 @@ Once enabled, access it at `/tui` or via the "Open Terminal" button on the setup
 The web TUI implements multiple security layers:
 
 | Control | Description |
+
+## External Dashboard Support
+
+This template supports connecting external dashboards and custom WebSocket clients to the OpenClaw gateway.
+
+### Method A: Allowed Origins (Recommended)
+
+Set `CONTROL_UI_ALLOWED_ORIGINS` in Railway Variables to a comma-separated list of allowed origins:
+
+```
+CONTROL_UI_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://10.0.0.100:3000
+```
+
+- This configures `gateway.controlUi.allowedOrigins` in the OpenClaw config after setup
+- Safe merge strategy: preserves existing origins and adds new ones
+- Takes effect after the next setup/run cycle
+
+### Method B: Force Origin (Fallback)
+
+If the gateway config cannot be modified, enable origin spoofing at the proxy level:
+
+```
+FORCE_WS_ORIGIN=true
+```
+
+- Forces WebSocket `Origin` header to match the gateway host for all upgrade requests
+- Use only if Method A doesn't work for your setup
+- May affect security - use with caution
+
+### Example Usage
+
+With `CONTROL_UI_ALLOWED_ORIGINS=http://localhost:3001`, your local Next.js dashboard at `http://localhost:3001` can:
+
+1. Connect to `wss://your-railway-domain.app/ws` (WebSocket will be proxied)
+2. Pass authentication via the gateway token
+3. Receive real-time updates without "origin not allowed" errors
+
+### Security
+
+| Control | Description |
 |---------|-------------|
 | **Opt-in only** | Disabled by default, requires explicit `ENABLE_WEB_TUI=true` |
 | **Password protected** | Uses the same `SETUP_PASSWORD` as the setup wizard |
