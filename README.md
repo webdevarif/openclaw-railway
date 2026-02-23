@@ -99,9 +99,52 @@ With `CONTROL_UI_ALLOWED_ORIGINS=http://localhost:3001`, your local Next.js dash
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_WEB_TUI` | `false` | Set to `true` to enable |
+| `ENABLE_WEB_TUI` | `false` | Set to `true` to enable web terminal |
 | `TUI_IDLE_TIMEOUT_MS` | `300000` (5 min) | Closes session after inactivity |
 | `TUI_MAX_SESSION_MS` | `1800000` (30 min) | Maximum session duration |
+| `CONTROL_UI_ALLOWED_ORIGINS` | `""` | Comma-separated list of allowed origins for external dashboards |
+| `FORCE_WS_ORIGIN` | `false` | Fallback: Force WebSocket Origin header at proxy level |
+| `OPENCLAW_GATEWAY_TOKEN` | *generated* | Gateway auth token (set via Railway secret for production) |
+| `TELEGRAM_DM_POLICY` | *default* | Override: `allow` or `pairing` |
+| `TELEGRAM_GROUP_POLICY` | *default* | Override: `allow` or `allowlist` |
+
+### Environment Variable Reference
+
+#### Required Variables
+- **`SETUP_PASSWORD`** - Password to access `/setup` wizard
+- **`OPENCLAW_STATE_DIR`** - Directory for OpenClaw state (use `/data/.openclaw` on Railway)
+- **`OPENCLAW_WORKSPACE_DIR`** - Directory for workspace files (use `/data/workspace` on Railway)
+
+#### External Dashboard Support
+- **`CONTROL_UI_ALLOWED_ORIGINS`** - Allows external WebSocket connections
+  ```
+  CONTROL_UI_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
+  ```
+- **`FORCE_WS_ORIGIN`** - Fallback origin spoofing (use if above doesn't work)
+
+#### Web Terminal (TUI)
+- **`ENABLE_WEB_TUI`** - Enable browser-based terminal at `/tui`
+- **`TUI_IDLE_TIMEOUT_MS`** - Auto-close after inactivity (default: 5 minutes)
+- **`TUI_MAX_SESSION_MS`** - Maximum session duration (default: 30 minutes)
+
+#### Telegram Policy Overrides
+- **`TELEGRAM_DM_POLICY`** - DM handling: `allow` (auto-allow) or `pairing` (require approval)
+- **`TELEGRAM_GROUP_POLICY`** - Group handling: `allow` (all groups) or `allowlist` (whitelisted only)
+
+#### Advanced Configuration
+- **`OPENCLAW_GATEWAY_TOKEN`** - Stable gateway token (use Railway `${{ secret() }}` for production)
+- **`PORT`** - Wrapper HTTP port (default: 8080, Railway sets automatically)
+- **`INTERNAL_GATEWAY_PORT`** - Internal gateway port (default: 18789)
+- **`INTERNAL_GATEWAY_HOST`** - Internal gateway host (default: 127.0.0.1)
+- **`OPENCLAW_ENTRY`** - Path to OpenClaw CLI entry point
+- **`OPENCLAW_NODE`** - Node.js executable to use
+- **`OPENCLAW_CONFIG_PATH`** - Custom config file path
+
+#### Debug Information
+Visit `/setup/api/debug` (requires setup password) to see:
+- Detected environment variables (names only, no values)
+- OpenClaw version and configuration
+- Gateway status and token information
 
 ## Local testing
 
@@ -139,9 +182,21 @@ A: Make sure `ENABLE_WEB_TUI=true` is set in your Railway Variables and redeploy
 
 A: Go to `/setup` and use the "Approve Pairing" dialog to approve pending pairing requests from your chat channels.
 
-**Q: How do I change the AI model after setup?**
+**Q: How do I connect an external dashboard like a custom Next.js interface?**
 
-A: Use the OpenClaw CLI to switch models. Access the web terminal at `/tui` (if enabled) or SSH into your container and run:
+A: Set `CONTROL_UI_ALLOWED_ORIGINS=http://localhost:3001` in Railway Variables to allow your local dashboard at `http://localhost:3001` to connect. If that doesn't work, set `FORCE_WS_ORIGIN=true` as a fallback.
+
+**Q: I don't see all environment variables in Railway UI?**
+
+A: Railway only shows variables that exist in your deployment. Make sure to set them in Railway Variables panel, then redeploy. Use `/setup/api/debug` to verify which variables are detected.
+
+**Q: How do I configure Telegram to auto-allow DMs instead of requiring pairing?**
+
+A: Set `TELEGRAM_DM_POLICY=allow` in Railway Variables and redeploy. This overrides the setup wizard configuration.
+
+**Q: How do I change AI model after setup?**
+
+A: Use OpenClaw CLI to switch models. Access the web terminal at `/tui` (if enabled) or SSH into your container and run:
 
 ```bash
 openclaw models set provider/model-id

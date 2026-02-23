@@ -25,6 +25,9 @@ const CONTROL_UI_ALLOWED_ORIGINS = process.env.CONTROL_UI_ALLOWED_ORIGINS?.trim(
 
 const FORCE_WS_ORIGIN = process.env.FORCE_WS_ORIGIN?.toLowerCase() === "true";
 
+const TELEGRAM_DM_POLICY = process.env.TELEGRAM_DM_POLICY?.trim();
+const TELEGRAM_GROUP_POLICY = process.env.TELEGRAM_GROUP_POLICY?.trim();
+
 function resolveGatewayToken() {
   const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   if (envTok) return envTok;
@@ -161,6 +164,71 @@ async function patchAllowedOrigins() {
     }
   } catch (err) {
     console.error(`[config] Error patching allowedOrigins: ${err.message}`);
+  }
+}
+
+async function applyTelegramPolicies() {
+  if (!TELEGRAM_DM_POLICY && !TELEGRAM_GROUP_POLICY) {
+    console.log("[config] Telegram policy variables not set, skipping patch");
+    return;
+  }
+
+  try {
+    // Get current telegram config
+    const currentResult = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "get", "channels.telegram"]),
+    );
+    
+    let currentConfig = {};
+    if (currentResult.code === 0 && currentResult.output.trim()) {
+      try {
+        currentConfig = JSON.parse(currentResult.output.trim());
+      } catch (e) {
+        console.warn(`[config] Failed to parse current telegram config: ${e.message}`);
+        currentConfig = {};
+      }
+    }
+
+    // Apply policy overrides
+    const updatedConfig = { ...currentConfig };
+    if (TELEGRAM_DM_POLICY) {
+      if (TELEGRAM_DM_POLICY !== 'allow' && TELEGRAM_DM_POLICY !== 'pairing') {
+        console.warn(`[config] Invalid TELEGRAM_DM_POLICY: ${TELEGRAM_DM_POLICY}. Must be 'allow' or 'pairing'`);
+      } else {
+        updatedConfig.dmPolicy = TELEGRAM_DM_POLICY;
+        console.log(`[config] Setting telegram dmPolicy to: ${TELEGRAM_DM_POLICY}`);
+      }
+    }
+
+    if (TELEGRAM_GROUP_POLICY) {
+      if (TELEGRAM_GROUP_POLICY !== 'allow' && TELEGRAM_GROUP_POLICY !== 'allowlist') {
+        console.warn(`[config] Invalid TELEGRAM_GROUP_POLICY: ${TELEGRAM_GROUP_POLICY}. Must be 'allow' or 'allowlist'`);
+      } else {
+        updatedConfig.groupPolicy = TELEGRAM_GROUP_POLICY;
+        console.log(`[config] Setting telegram groupPolicy to: ${TELEGRAM_GROUP_POLICY}`);
+      }
+    }
+
+    // Set the updated config
+    const setResult = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "channels.telegram",
+        JSON.stringify(updatedConfig),
+      ]),
+    );
+
+    if (setResult.code === 0) {
+      console.log(`[config] Updated telegram config successfully`);
+    } else {
+      console.error(`[config] Failed to update telegram config: ${setResult.output}`);
+    }
+  } catch (err) {
+    console.error(`[config] Error applying telegram policies: ${err.message}`);
   }
 }
 
@@ -716,6 +784,13 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         extra += "[config] gateway.controlUi.allowedOrigins patched\n";
       }
 
+      // Apply Telegram policy overrides if configured
+      if (TELEGRAM_DM_POLICY || TELEGRAM_GROUP_POLICY) {
+        extra += "[setup] Applying Telegram policy overrides...\n";
+        await applyTelegramPolicies();
+        extra += "[config] Telegram policies applied\n";
+      }
+
       if (payload.model?.trim()) {
         extra += `[setup] Setting model to ${payload.model.trim()}...\n`;
         const modelResult = await runCmd(
@@ -796,6 +871,23 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
+  
+  // Detect optional environment variables (names only, no values)
+  const detectedVars = [];
+  if (SETUP_PASSWORD) detectedVars.push('SETUP_PASSWORD');
+  if (ENABLE_WEB_TUI) detectedVars.push('ENABLE_WEB_TUI');
+  if (CONTROL_UI_ALLOWED_ORIGINS.length > 0) detectedVars.push('CONTROL_UI_ALLOWED_ORIGINS');
+  if (FORCE_WS_ORIGIN) detectedVars.push('FORCE_WS_ORIGIN');
+  if (TELEGRAM_DM_POLICY) detectedVars.push('TELEGRAM_DM_POLICY');
+  if (TELEGRAM_GROUP_POLICY) detectedVars.push('TELEGRAM_GROUP_POLICY');
+  if (process.env.OPENCLAW_GATEWAY_TOKEN?.trim()) detectedVars.push('OPENCLAW_GATEWAY_TOKEN');
+  if (process.env.INTERNAL_GATEWAY_HOST?.trim()) detectedVars.push('INTERNAL_GATEWAY_HOST');
+  if (process.env.INTERNAL_GATEWAY_PORT?.trim()) detectedVars.push('INTERNAL_GATEWAY_PORT');
+  if (process.env.OPENCLAW_STATE_DIR?.trim()) detectedVars.push('OPENCLAW_STATE_DIR');
+  if (process.env.OPENCLAW_WORKSPACE_DIR?.trim()) detectedVars.push('OPENCLAW_WORKSPACE_DIR');
+  if (process.env.TUI_IDLE_TIMEOUT_MS?.trim()) detectedVars.push('TUI_IDLE_TIMEOUT_MS');
+  if (process.env.TUI_MAX_SESSION_MS?.trim()) detectedVars.push('TUI_MAX_SESSION_MS');
+  
   res.json({
     wrapper: {
       node: process.version,
@@ -808,6 +900,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
         path.join(STATE_DIR, "gateway.token"),
       ),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+      detectedEnvVars: detectedVars,
     },
     openclaw: {
       entry: OPENCLAW_ENTRY,
@@ -1161,6 +1254,26 @@ const server = app.listen(PORT, () => {
   console.log(`[wrapper] setup wizard: http://localhost:${PORT}/setup`);
   console.log(`[wrapper] web TUI: ${ENABLE_WEB_TUI ? "enabled" : "disabled"}`);
   console.log(`[wrapper] configured: ${isConfigured()}`);
+  
+  // Log detected environment variables for debugging
+  const detectedVars = [];
+  if (SETUP_PASSWORD) detectedVars.push('SETUP_PASSWORD');
+  if (ENABLE_WEB_TUI) detectedVars.push('ENABLE_WEB_TUI');
+  if (CONTROL_UI_ALLOWED_ORIGINS.length > 0) detectedVars.push('CONTROL_UI_ALLOWED_ORIGINS');
+  if (FORCE_WS_ORIGIN) detectedVars.push('FORCE_WS_ORIGIN');
+  if (TELEGRAM_DM_POLICY) detectedVars.push('TELEGRAM_DM_POLICY');
+  if (TELEGRAM_GROUP_POLICY) detectedVars.push('TELEGRAM_GROUP_POLICY');
+  if (process.env.OPENCLAW_GATEWAY_TOKEN?.trim()) detectedVars.push('OPENCLAW_GATEWAY_TOKEN');
+  if (process.env.INTERNAL_GATEWAY_HOST?.trim()) detectedVars.push('INTERNAL_GATEWAY_HOST');
+  if (process.env.INTERNAL_GATEWAY_PORT?.trim()) detectedVars.push('INTERNAL_GATEWAY_PORT');
+  if (process.env.OPENCLAW_STATE_DIR?.trim()) detectedVars.push('OPENCLAW_STATE_DIR');
+  if (process.env.OPENCLAW_WORKSPACE_DIR?.trim()) detectedVars.push('OPENCLAW_WORKSPACE_DIR');
+  if (process.env.TUI_IDLE_TIMEOUT_MS?.trim()) detectedVars.push('TUI_IDLE_TIMEOUT_MS');
+  if (process.env.TUI_MAX_SESSION_MS?.trim()) detectedVars.push('TUI_MAX_SESSION_MS');
+  
+  if (detectedVars.length > 0) {
+    console.log(`[wrapper] detected env vars: ${detectedVars.join(', ')}`);
+  }
 
   if (isConfigured()) {
     (async () => {
